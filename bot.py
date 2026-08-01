@@ -1,9 +1,27 @@
 import os
 import time
 import json
+import threading
 import yt_dlp
+from flask import Flask
 from telegram import Update, ReplyKeyboardMarkup, ReplyKeyboardRemove
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
+
+# ---- Keep-alive web server (for Replit + UptimeRobot) ----
+keep_alive_app = Flask('')
+
+@keep_alive_app.route('/')
+def home():
+    return "Bot is alive!"
+
+def run_keep_alive():
+    keep_alive_app.run(host='0.0.0.0', port=8080)
+
+def keep_alive():
+    t = threading.Thread(target=run_keep_alive)
+    t.daemon = True
+    t.start()
+# ------------------------------------------------------------
 
 # Set up download directory
 DOWNLOAD_PATH = os.path.join(os.getcwd(), 'downloads')
@@ -231,6 +249,7 @@ def main():
     application.add_handler(CommandHandler("stats", stats))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     
+    keep_alive()  # يشغل سيرفر صغير عشان UptimeRobot يعمله ping ويمنعه ينام
     print("Bot started!")
     application.run_polling()
 
