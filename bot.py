@@ -1,389 +1,238 @@
-"""
-Universal Media Downloader — Telegram Bot
-يحمل فيديو/صوت من الروابط المدعومة عن طريق yt-dlp.
-"""
-
 import os
-import json
 import time
-import logging
-import asyncio
-import threading
-from dataclasses import dataclass, field
-from pathlib import Path
-from typing import Optional
-
+import json
 import yt_dlp
-from flask import Flask
 from telegram import Update, ReplyKeyboardMarkup, ReplyKeyboardRemove
-from telegram.constants import ParseMode
-from telegram.ext import (
-    Application,
-    CommandHandler,
-    ConversationHandler,
-    MessageHandler,
-    ContextTypes,
-    filters,
-)
+from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 
-# ────────────────────────────── الإعدادات ──────────────────────────────
+# Set up download directory
+DOWNLOAD_PATH = os.path.join(os.getcwd(), 'downloads')
+if not os.path.exists(DOWNLOAD_PATH):
+    os.makedirs(DOWNLOAD_PATH)
 
-@dataclass(frozen=True)
-class Config:
-    api_token: str
-    download_dir: Path = Path("downloads")
-    users_file: Path = Path("bot_users.json")
-    max_file_size_mb: int = 50          # حد تليجرام لإرسال الملفات عن طريق البوت
-    keep_alive_port: int = 8080
-    supported_qualities: tuple = ("144p", "240p", "360p", "480p", "720p", "1080p")
+# User data storage
+USERS_FILE = 'bot_users.json'
 
-    @classmethod
-    def from_env(cls) -> "Config":
-        token = os.getenv("API_TOKEN")
-        if not token:
-            raise ValueError("API_TOKEN is not set in environment variables.")
-        return cls(api_token=token)
-
-
-logging.basicConfig(
-    format="%(asctime)s | %(levelname)-8s | %(name)s | %(message)s",
-    level=logging.INFO,
-)
-logging.getLogger("httpx").setLevel(logging.WARNING)  # تقليل ضوضاء اللوج
-logger = logging.getLogger("media_bot")
-
-# حالات المحادثة
-CHOOSING_TYPE, CHOOSING_QUALITY = range(2)
-
-
-# ────────────────────────────── تخزين المستخدمين ──────────────────────────────
-
-class UserStore:
-    """تخزين بسيط وآمن (thread-safe) لبيانات المستخدمين في ملف JSON."""
-
-    def __init__(self, path: Path):
-        self._path = path
-        self._lock = threading.Lock()
-
-    def _load(self) -> dict:
-        if not self._path.exists():
-            return {"users": [], "profiles": {}}
+def load_users():
+    """Load users from the JSON file"""
+    if os.path.exists(USERS_FILE):
         try:
-            with self._path.open("r", encoding="utf-8") as f:
+            with open(USERS_FILE, 'r') as f:
                 return json.load(f)
-        except (json.JSONDecodeError, OSError) as exc:
-            logger.warning("تعذّرت قراءة ملف المستخدمين، هيتعمل ملف جديد: %s", exc)
-            return {"users": [], "profiles": {}}
+        except json.JSONDecodeError:
+            return {'users': [], 'total_count': 0}
+    return {'users': [], 'total_count': 0}
 
-    def _save(self, data: dict) -> None:
-        tmp_path = self._path.with_suffix(".tmp")
-        with tmp_path.open("w", encoding="utf-8") as f:
-            json.dump(data, f, ensure_ascii=False, indent=2)
-        tmp_path.replace(self._path)  # كتابة atomic لتجنب تلف الملف
+def save_users(users_data):
+    """Save users to the JSON file"""
+    with open(USERS_FILE, 'w') as f:
+        json.dump(users_data, f)
 
-    def track(self, user_id: int, username: Optional[str], first_name: Optional[str]) -> int:
-        with self._lock:
-            data = self._load()
-            uid = str(user_id)
-            if uid not in data["users"]:
-                data["users"].append(uid)
-            data["profiles"][uid] = {
-                "username": username or "",
-                "first_name": first_name or "",
-                "last_activity": time.strftime("%Y-%m-%d %H:%M:%S"),
-            }
-            self._save(data)
-            return len(data["users"])
+def track_user(user_id, username, first_name):
+    """Track a user who interacted with the bot"""
+    users_data = load_users()
+    
+    if str(user_id) not in users_data['users']:
+        users_data['users'].append(str(user_id))
+        users_data['total_count'] = len(users_data['users'])
+    
+    user_info = {
+        'username': username or '',
+        'first_name': first_name or '',
+        'last_activity': time.strftime("%Y-%m-%d %H:%M:%S")
+    }
+    users_data[str(user_id)] = user_info
+    
+    save_users(users_data)
+    return users_data['total_count']
 
-    def count(self) -> int:
-        with self._lock:
-            return len(self._load()["users"])
+def get_user_count():
+    """Get the total number of unique users"""
+    users_data = load_users()
+    return users_data['total_count']
 
-
-# ────────────────────────────── منطق التحميل ──────────────────────────────
-
-class DownloadError(Exception):
-    """خطأ متوقع أثناء التحميل، رسالته آمنة للعرض على المستخدم مباشرة."""
-
-
-class MediaDownloader:
-    def __init__(self, config: Config):
-        self.config = config
-        config.download_dir.mkdir(parents=True, exist_ok=True)
-
-    def _pick_target_height(self, url: str, requested: Optional[str]) -> Optional[int]:
-        if not requested:
-            return None
-        with yt_dlp.YoutubeDL({"quiet": True, "no_warnings": True}) as ydl:
+def download_media(url, media_type='video', video_quality=None):
+    """Download media from URL with specified quality options"""
+    timestamp = time.strftime("%Y%m%d-%H%M%S")
+    try:
+        # Extract available formats to determine the best match for the requested quality
+        with yt_dlp.YoutubeDL({'quiet': True}) as ydl:
             info = ydl.extract_info(url, download=False)
+            formats = info.get('formats', [])
+            available_heights = sorted(set(f.get('height', 0) for f in formats if f.get('height')))
+            
+            # Parse the requested quality (e.g., "720p" -> 720)
+            requested_height = int(video_quality.replace('p', '')) if video_quality else None
+            
+            # Find the closest available height to the requested quality
+            if requested_height:
+                higher_qualities = [h for h in available_heights if h >= requested_height]
+                lower_qualities = [h for h in available_heights if h <= requested_height]
+                
+                if higher_qualities:
+                    target_height = min(higher_qualities)
+                elif lower_qualities:
+                    target_height = max(lower_qualities)
+                else:
+                    target_height = available_heights[0]  # Default to the lowest available quality
+            else:
+                target_height = max(available_heights)  # Default to the highest available quality
 
-        heights = sorted({f.get("height") for f in info.get("formats", []) if f.get("height")})
-        if not heights:
-            return None
-
-        requested_h = int(requested.replace("p", ""))
-        higher = [h for h in heights if h >= requested_h]
-        return min(higher) if higher else max(heights)
-
-    def _build_opts(self, media_type: str, target_height: Optional[int], timestamp: str) -> dict:
-        outtmpl = str(self.config.download_dir / f"{media_type}_{timestamp}.%(ext)s")
-        opts = {
-            "outtmpl": outtmpl,
-            "noplaylist": True,
-            "quiet": True,
-            "no_warnings": True,
-            "http_headers": {
-                "User-Agent": (
-                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                    "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
-                )
-            },
+        # Define yt-dlp options based on the selected quality
+        ydl_opts = {
+            'format': f'bestvideo[height<={target_height}]+bestaudio/best[height<={target_height}]',
+            'outtmpl': os.path.join(DOWNLOAD_PATH, f'{media_type}_{timestamp}.%(ext)s'),
+            'noplaylist': True,
+            'quiet': True,
+            'http_headers': {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+            }
         }
 
-        if media_type == "audio":
-            opts["format"] = "bestaudio/best"
-            opts["postprocessors"] = [
-                {"key": "FFmpegExtractAudio", "preferredcodec": "mp3"}
-            ]
-        else:
-            height_filter = f"[height<={target_height}]" if target_height else ""
-            opts["format"] = f"bestvideo{height_filter}+bestaudio/best{height_filter}"
+        # Handle audio post-processing
+        if media_type == 'audio':
+            ydl_opts.update({
+                'postprocessors': [{
+                    'key': 'FFmpegExtractAudio',
+                    'preferredcodec': 'mp3',
+                }]
+            })
 
-        return opts
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            info_dict = ydl.extract_info(url, download=True)
+            file_name = ydl.prepare_filename(info_dict)
+            
+            if media_type == 'audio':
+                converted_file = os.path.splitext(file_name)[0] + '.mp3'
+                if os.path.exists(converted_file):
+                    return f"Successfully downloaded audio: {info_dict.get('title', 'Unknown')}", converted_file
+                return "Error: Audio conversion failed.", None
+            
+            return f"Successfully downloaded: {info_dict.get('title', 'Unknown')}", file_name
 
-    def download(self, url: str, media_type: str, quality: Optional[str] = None) -> tuple[str, Path]:
-        """
-        يحمل الميديا ويرجّع (العنوان, مسار الملف).
-        يرفع DownloadError برسالة مفهومة للمستخدم لو حصلت مشكلة متوقعة.
-        """
-        timestamp = time.strftime("%Y%m%d-%H%M%S")
-        try:
-            target_height = self._pick_target_height(url, quality) if media_type == "video" else None
-            opts = self._build_opts(media_type, target_height, timestamp)
+    except Exception as e:
+        error_message = str(e)
+        if "is not a valid URL" in error_message or "Unsupported URL" in error_message:
+            return "❌ تحقق من الرابط. يبدو أن الرابط الذي أدخلته غير صالح.", None
+        return f"❌ Error during download: {error_message}", None
 
-            with yt_dlp.YoutubeDL(opts) as ydl:
-                info = ydl.extract_info(url, download=True)
-                file_path = Path(ydl.prepare_filename(info))
-
-            if media_type == "audio":
-                file_path = file_path.with_suffix(".mp3")
-
-            if not file_path.exists():
-                raise DownloadError("الملف مفيش بعد التحميل، جرّب تاني.")
-
-            return info.get("title", "Unknown"), file_path
-
-        except yt_dlp.utils.DownloadError as exc:
-            msg = str(exc)
-            if "Unsupported URL" in msg or "is not a valid URL" in msg:
-                raise DownloadError("❌ الرابط غير مدعوم أو غير صالح. تأكد منه وحاول تاني.") from exc
-            raise DownloadError("❌ تعذّر تحميل هذا الرابط. قد يكون خاص أو محذوف.") from exc
-        except Exception as exc:  # أي خطأ غير متوقع
-            logger.exception("خطأ غير متوقع أثناء التحميل")
-            raise DownloadError("❌ حصل خطأ غير متوقع أثناء التحميل، حاول تاني بعد شوية.") from exc
-
-    def file_size_mb(self, path: Path) -> float:
-        return path.stat().st_size / (1024 * 1024)
-
-
-# ────────────────────────────── واجهة تليجرام ──────────────────────────────
-
-class MediaBot:
-    def __init__(self, config: Config):
-        self.config = config
-        self.users = UserStore(config.users_file)
-        self.downloader = MediaDownloader(config)
-
-    # ---------- أوامر ----------
-
-    async def start(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-        user = update.effective_user
-        self.users.track(user.id, user.username, user.first_name)
-        context.user_data.clear()
-        await update.message.reply_text(
-            f"أهلاً بيك يا {user.first_name}! 👋\n\n"
-            "ابعتلي رابط الفيديو أو الصوت اللي عايز تحمّله.",
-            reply_markup=ReplyKeyboardRemove(),
-        )
-        return ConversationHandler.END  # هيدخل في المحادثة تاني مع أول رابط
-
-    async def stats(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-        await update.message.reply_text(f"📊 عدد المستخدمين: {self.users.count()}")
-
-    async def cancel(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-        context.user_data.clear()
-        await update.message.reply_text(
-            "تم الإلغاء. ابعت رابط جديد للبدء تاني.",
-            reply_markup=ReplyKeyboardRemove(),
-        )
-        return ConversationHandler.END
-
-    # ---------- خطوات المحادثة ----------
-
-    async def receive_url(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-        user = update.effective_user
-        self.users.track(user.id, user.username, user.first_name)
-
-        url = update.message.text.strip()
-        if not url.lower().startswith(("http://", "https://")):
-            await update.message.reply_text("محتاج رابط صحيح يبدأ بـ http:// أو https://")
-            return ConversationHandler.END
-
-        context.user_data["url"] = url
-        keyboard = [["🎧 صوت", "🎬 فيديو"], ["❌ إلغاء"]]
-        await update.message.reply_text(
-            "اختار نوع التحميل:",
-            reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True, one_time_keyboard=True),
-        )
-        return CHOOSING_TYPE
-
-    async def choose_type(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-        text = update.message.text.strip()
-
-        if "صوت" in text:
-            await self._download_and_send(update, context, media_type="audio")
-            return ConversationHandler.END
-
-        if "فيديو" in text:
-            keyboard = [
-                [f"🎥 {q}" for q in self.config.supported_qualities[i:i + 2]]
-                for i in range(0, len(self.config.supported_qualities), 2)
-            ] + [["❌ إلغاء"]]
-            await update.message.reply_text(
-                "اختار الجودة:",
-                reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True, one_time_keyboard=True),
-            )
-            return CHOOSING_QUALITY
-
-        await update.message.reply_text("اختيار غير معروف، اختار من الأزرار اللي فوق.")
-        return CHOOSING_TYPE
-
-    async def choose_quality(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-        text = update.message.text.replace("🎥 ", "").strip()
-        if text not in self.config.supported_qualities:
-            await update.message.reply_text("جودة غير معروفة، اختار من الأزرار اللي فوق.")
-            return CHOOSING_QUALITY
-
-        await self._download_and_send(update, context, media_type="video", quality=text)
-        return ConversationHandler.END
-
-    # ---------- التحميل والإرسال ----------
-
-    async def _download_and_send(
-        self,
-        update: Update,
-        context: ContextTypes.DEFAULT_TYPE,
-        media_type: str,
-        quality: Optional[str] = None,
-    ) -> None:
-        url = context.user_data.get("url")
-        status = await update.message.reply_text(
-            "⏳ جاري التحميل... ممكن ياخد شوية وقت حسب حجم الملف.",
-            reply_markup=ReplyKeyboardRemove(),
-        )
-
-        file_path: Optional[Path] = None
-        try:
-            # التحميل بيبلوكينج، فبنشغله في executor عشان مايوقفش البوت عن استقبال رسائل تانية
-            loop = asyncio.get_running_loop()
-            title, file_path = await loop.run_in_executor(
-                None, self.downloader.download, url, media_type, quality
-            )
-
-            size_mb = self.downloader.file_size_mb(file_path)
-            if size_mb > self.config.max_file_size_mb:
-                await status.edit_text(
-                    f"❌ الملف حجمه {size_mb:.1f}MB وده أكبر من حد تليجرام "
-                    f"({self.config.max_file_size_mb}MB). جرّب جودة أقل."
-                )
-                return
-
-            await status.edit_text(f"✅ خلص: {title}\nجاري الرفع...")
-            with file_path.open("rb") as f:
-                if media_type == "audio":
-                    await update.message.reply_audio(f, title=title)
-                else:
-                    await update.message.reply_video(f, caption=title, supports_streaming=True)
-            await status.delete()
-
-        except DownloadError as exc:
-            await status.edit_text(str(exc))
-        except Exception:
-            logger.exception("خطأ غير متوقع أثناء الإرسال")
-            await status.edit_text("❌ حصل خطأ غير متوقع. حاول تاني.")
-        finally:
-            context.user_data.clear()
-            if file_path and file_path.exists():
-                try:
-                    file_path.unlink()
-                except OSError as exc:
-                    logger.warning("تعذّر حذف الملف المؤقت %s: %s", file_path, exc)
-
-    # ---------- معالج أخطاء عام ----------
-
-    async def on_error(self, update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
-        logger.error("Exception أثناء معالجة تحديث %s", update, exc_info=context.error)
-
-
-# ────────────────────────────── سيرفر keep-alive (Replit + UptimeRobot) ──────────────────────────────
-
-def start_keep_alive_server(port: int) -> None:
-    app = Flask(__name__)
-
-    @app.route("/")
-    def home():
-        return "Bot is alive!"
-
-    def run():
-        app.run(host="0.0.0.0", port=port)
-
-    thread = threading.Thread(target=run, daemon=True)
-    thread.start()
-
-
-# ────────────────────────────── نقطة التشغيل ──────────────────────────────
-
-def build_application(config: Config) -> Application:
-    bot = MediaBot(config)
-    app = Application.builder().token(config.api_token).build()
-
-    cancel_button = MessageHandler(filters.Regex("^❌ إلغاء$"), bot.cancel)
-
-    conversation = ConversationHandler(
-        entry_points=[MessageHandler(filters.TEXT & ~filters.COMMAND, bot.receive_url)],
-        states={
-            # زرار الإلغاء لازم يتفحص الأول، وإلا الـ handler العام هياخده كـ "اختيار غير معروف"
-            CHOOSING_TYPE: [
-                cancel_button,
-                MessageHandler(filters.TEXT & ~filters.COMMAND, bot.choose_type),
-            ],
-            CHOOSING_QUALITY: [
-                cancel_button,
-                MessageHandler(filters.TEXT & ~filters.COMMAND, bot.choose_quality),
-            ],
-        },
-        fallbacks=[
-            CommandHandler("cancel", bot.cancel),
-            cancel_button,
-        ],
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Start command handler"""
+    user = update.effective_user
+    track_user(user.id, user.username, user.first_name)
+    
+    context.user_data.clear()
+    await update.message.reply_text(
+        f"Welcome to the Universal Media Downloader, {user.first_name}! 👋\n\n"
+        "Please enter the URL of the media you want to download:",
+        reply_markup=ReplyKeyboardRemove()
     )
 
-    app.add_handler(CommandHandler("start", bot.start))
-    app.add_handler(CommandHandler("stats", bot.stats))
-    app.add_handler(conversation)
-    app.add_error_handler(bot.on_error)
+async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Admin command to show bot statistics"""
+    user_count = get_user_count()
+    await update.message.reply_text(
+        f"📊 Bot Statistics\n\n"
+        f"Total Users: {user_count}"
+    )
 
-    return app
+async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle incoming messages"""
+    user = update.effective_user
+    track_user(user.id, user.username, user.first_name)
+    
+    text = update.message.text.strip()
 
+    if text.lower() in ['cancel', 'close', '❌ cancel']:
+        context.user_data.clear()
+        await update.message.reply_text(
+            "Operation canceled. Please enter a new URL to start again.",
+            reply_markup=ReplyKeyboardRemove()
+        )
+        return
 
-def main() -> None:
-    config = Config.from_env()
-    start_keep_alive_server(config.keep_alive_port)
+    user_data = context.user_data
+    if 'url' not in user_data:
+        user_data['url'] = text
+        keyboard = [["🎧 Audio", "🎬 Video"], ["❌ Cancel"]]
+        reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True, one_time_keyboard=True)
+        await update.message.reply_text("Choose media type:", reply_markup=reply_markup)
+    
+    elif 'media_type' not in user_data:
+        if text.lower() in ['🎧 audio', 'audio']:
+            user_data['media_type'] = 'audio'
+            status_message = await update.message.reply_text("⏳ Downloading audio... Please wait.")
+            
+            message, file_path = download_media(user_data['url'], media_type='audio')
+            
+            if "Error" in message:
+                await status_message.edit_text(f"❌ {message}")
+            else:
+                await status_message.edit_text(f"✅ {message}")
+                if file_path and os.path.exists(file_path):
+                    with open(file_path, 'rb') as file:
+                        await update.message.reply_audio(file)
+                    os.remove(file_path)
+                else:
+                    await update.message.reply_text("❌ File not found after download. Please try again.")
+            context.user_data.clear()
+        
+        elif text.lower() in ['🎬 video', 'video']:
+            user_data['media_type'] = 'video'
+            keyboard = [
+                ["🎥 144p", "🎥 240p"],
+                ["🎥 360p", "🎥 480p"],
+                ["🎥 720p", "🎥 1080p"],
+                ["❌ Cancel"]
+            ]
+            reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True, one_time_keyboard=True)
+            await update.message.reply_text("Select video quality:", reply_markup=reply_markup)
+        
+        else:
+            await update.message.reply_text("Invalid choice. Please choose '🎧 Audio' or '🎬 Video'.")
+    
+    elif 'video_quality' not in user_data:
+        supported_qualities = ["144p", "240p", "360p", "480p", "720p", "1080p"]
+        if text in [f"🎥 {q}" for q in supported_qualities]:
+            selected_quality = text.replace("🎥 ", "")
+            user_data['video_quality'] = selected_quality
+            
+            status_message = await update.message.reply_text("⏳ Downloading video... Please wait.")
+            
+            message, file_path = download_media(
+                user_data['url'], 
+                media_type='video', 
+                video_quality=selected_quality
+            )
+            
+            if "Error" in message:
+                await status_message.edit_text(f"❌ {message}")
+            else:
+                await status_message.edit_text(f"✅ {message}")
+                if file_path and os.path.exists(file_path):
+                    with open(file_path, 'rb') as file:
+                        await update.message.reply_video(file)
+                    os.remove(file_path)
+                else:
+                    await status_message.edit_text("❌ File not found after download. Please try again.")
+            context.user_data.clear()
+        
+        else:
+            await update.message.reply_text("Invalid video quality choice. Please select a valid option.")
 
-    application = build_application(config)
-    logger.info("Bot started!")
-    application.run_polling(allowed_updates=Update.ALL_TYPES)
+def main():
+    """Run the bot"""
+    API_TOKEN = os.getenv('API_TOKEN')
+    if not API_TOKEN:
+        raise ValueError("API_TOKEN is not set in environment variables.")
 
+    application = Application.builder().token(API_TOKEN).build()
+    application.add_handler(CommandHandler("start", start))
+    application.add_handler(CommandHandler("stats", stats))
+    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+    
+    print("Bot started!")
+    application.run_polling()
 
-if __name__ == "__main__":
+if __name__ == '__main__':
     main()
