@@ -347,15 +347,24 @@ def build_application(config: Config) -> Application:
     bot = MediaBot(config)
     app = Application.builder().token(config.api_token).build()
 
+    cancel_button = MessageHandler(filters.Regex("^❌ إلغاء$"), bot.cancel)
+
     conversation = ConversationHandler(
         entry_points=[MessageHandler(filters.TEXT & ~filters.COMMAND, bot.receive_url)],
         states={
-            CHOOSING_TYPE: [MessageHandler(filters.TEXT & ~filters.COMMAND, bot.choose_type)],
-            CHOOSING_QUALITY: [MessageHandler(filters.TEXT & ~filters.COMMAND, bot.choose_quality)],
+            # زرار الإلغاء لازم يتفحص الأول، وإلا الـ handler العام هياخده كـ "اختيار غير معروف"
+            CHOOSING_TYPE: [
+                cancel_button,
+                MessageHandler(filters.TEXT & ~filters.COMMAND, bot.choose_type),
+            ],
+            CHOOSING_QUALITY: [
+                cancel_button,
+                MessageHandler(filters.TEXT & ~filters.COMMAND, bot.choose_quality),
+            ],
         },
         fallbacks=[
             CommandHandler("cancel", bot.cancel),
-            MessageHandler(filters.Regex("^❌ إلغاء$"), bot.cancel),
+            cancel_button,
         ],
     )
 
