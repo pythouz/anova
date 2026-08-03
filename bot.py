@@ -20,6 +20,10 @@ MAX_FILE_SIZE_MB = 50
 # ابعت /myid للبوت عشان تعرف الآي دي بتاعك
 ADMIN_ID = os.getenv('ADMIN_ID')
 
+# مسار ملف الكوكيز (بيتكتب من الـ secret وقت التشغيل على GitHub Actions)
+# لو الملف مش موجود، البوت هيشتغل عادي من غيره (بس ممكن يوتيوب يرفض بعض الطلبات)
+COOKIES_FILE = 'cookies.txt'
+
 def load_users():
     """Load users from the JSON file"""
     if os.path.exists(USERS_FILE):
@@ -76,7 +80,10 @@ def download_media(url, media_type='video', video_quality=None):
     timestamp = time.strftime("%Y%m%d-%H%M%S")
     try:
         # Extract available formats to determine the best match for the requested quality
-        with yt_dlp.YoutubeDL({'quiet': True}) as ydl:
+        probe_opts = {'quiet': True}
+        if os.path.exists(COOKIES_FILE):
+            probe_opts['cookiefile'] = COOKIES_FILE
+        with yt_dlp.YoutubeDL(probe_opts) as ydl:
             info = ydl.extract_info(url, download=False)
             formats = info.get('formats', [])
             available_heights = sorted(set(f.get('height', 0) for f in formats if f.get('height')))
@@ -108,6 +115,10 @@ def download_media(url, media_type='video', video_quality=None):
                 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
             }
         }
+
+        # لو ملف الكوكيز موجود، استخدمه عشان يتجاوز فحص "Sign in to confirm you're not a bot"
+        if os.path.exists(COOKIES_FILE):
+            ydl_opts['cookiefile'] = COOKIES_FILE
 
         # Handle audio post-processing
         if media_type == 'audio':
