@@ -13,6 +13,13 @@ if not os.path.exists(DOWNLOAD_PATH):
 # User data storage
 USERS_FILE = 'bot_users.json'
 
+# حد تليجرام الأقصى لإرسال الملفات عن طريق البوت (بالميجابايت)
+MAX_FILE_SIZE_MB = 50
+
+# آي دي الأدمن بتاعك (حط رقمك هنا أو من متغير بيئة، عشان أوامر الأدمن تشتغل ليك بس)
+# ابعت /myid للبوت عشان تعرف الآي دي بتاعك
+ADMIN_ID = os.getenv('ADMIN_ID')
+
 def load_users():
     """Load users from the JSON file"""
     if os.path.exists(USERS_FILE):
@@ -50,6 +57,19 @@ def get_user_count():
     """Get the total number of unique users"""
     users_data = load_users()
     return users_data['total_count']
+
+def get_users_list():
+    """Get a formatted list of all users with their info"""
+    users_data = load_users()
+    lines = []
+    for uid in users_data['users']:
+        info = users_data.get(uid, {})
+        username = info.get('username', '')
+        first_name = info.get('first_name', 'Unknown')
+        last_activity = info.get('last_activity', '-')
+        tag = f"@{username}" if username else f"id:{uid}"
+        lines.append(f"• {first_name} ({tag}) — آخر نشاط: {last_activity}")
+    return lines
 
 def download_media(url, media_type='video', video_quality=None):
     """Download media from URL with specified quality options"""
@@ -116,6 +136,10 @@ def download_media(url, media_type='video', video_quality=None):
             return "❌ تحقق من الرابط. يبدو أن الرابط الذي أدخلته غير صالح.", None
         return f"❌ Error during download: {error_message}", None
 
+def get_file_size_mb(file_path):
+    """Get file size in megabytes"""
+    return os.path.getsize(file_path) / (1024 * 1024)
+
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Start command handler"""
     user = update.effective_user
@@ -135,6 +159,30 @@ async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"📊 Bot Statistics\n\n"
         f"Total Users: {user_count}"
     )
+
+async def myid(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Shows the user their own Telegram ID (use this to find your ADMIN_ID)"""
+    await update.message.reply_text(f"الآي دي بتاعك هو: {update.effective_user.id}")
+
+async def users_list(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Admin-only: list all subscribed users"""
+    user = update.effective_user
+    if not ADMIN_ID or str(user.id) != str(ADMIN_ID):
+        await update.message.reply_text("❌ الأمر ده للأدمن بس.")
+        return
+
+    lines = get_users_list()
+    if not lines:
+        await update.message.reply_text("مفيش مستخدمين مسجلين لسه.")
+        return
+
+    header = f"👥 عدد المشتركين: {len(lines)}\n\n"
+    body = "\n".join(lines)
+
+    # تليجرام بيحط حد أقصى لطول الرسالة (4096 حرف)، فبنقسمها لو طويلة
+    full_message = header + body
+    for i in range(0, len(full_message), 4000):
+        await update.message.reply_text(full_message[i:i + 4000])
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle incoming messages"""
@@ -167,14 +215,21 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             
             if "Error" in message:
                 await status_message.edit_text(f"❌ {message}")
-            else:
-                await status_message.edit_text(f"✅ {message}")
-                if file_path and os.path.exists(file_path):
+            elif file_path and os.path.exists(file_path):
+                size_mb = get_file_size_mb(file_path)
+                if size_mb > MAX_FILE_SIZE_MB:
+                    await status_message.edit_text(
+                        f"❌ حجم الملف {size_mb:.1f}MB وده أكبر من حد تليجرام ({MAX_FILE_SIZE_MB}MB).\n"
+                        "جرّب فيديو أقصر."
+                    )
+                    os.remove(file_path)
+                else:
+                    await status_message.edit_text(f"✅ {message}\nجاري الرفع...")
                     with open(file_path, 'rb') as file:
                         await update.message.reply_audio(file)
                     os.remove(file_path)
-                else:
-                    await update.message.reply_text("❌ File not found after download. Please try again.")
+            else:
+                await update.message.reply_text("❌ File not found after download. Please try again.")
             context.user_data.clear()
         
         elif text.lower() in ['🎬 video', 'video']:
@@ -186,7 +241,12 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 ["❌ Cancel"]
             ]
             reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True, one_time_keyboard=True)
-            await update.message.reply_text("Select video quality:", reply_markup=reply_markup)
+            await update.message.reply_text(
+                "Select video quality:\n"
+                "⚠️ ملحوظة: الفيديوهات الطويلة أو بجودة عالية ممكن يتعدى حجمها 50MB "
+                "(حد تليجرام)، فينصح تختار جودة أقل للفيديوهات الطويلة.",
+                reply_markup=reply_markup
+            )
         
         else:
             await update.message.reply_text("Invalid choice. Please choose '🎧 Audio' or '🎬 Video'.")
@@ -207,14 +267,21 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             
             if "Error" in message:
                 await status_message.edit_text(f"❌ {message}")
-            else:
-                await status_message.edit_text(f"✅ {message}")
-                if file_path and os.path.exists(file_path):
+            elif file_path and os.path.exists(file_path):
+                size_mb = get_file_size_mb(file_path)
+                if size_mb > MAX_FILE_SIZE_MB:
+                    await status_message.edit_text(
+                        f"❌ حجم الملف {size_mb:.1f}MB وده أكبر من حد تليجرام ({MAX_FILE_SIZE_MB}MB).\n"
+                        "جرّب جودة أقل (144p أو 240p) خصوصًا لو الفيديو طويل."
+                    )
+                    os.remove(file_path)
+                else:
+                    await status_message.edit_text(f"✅ {message}\nجاري الرفع...")
                     with open(file_path, 'rb') as file:
                         await update.message.reply_video(file)
                     os.remove(file_path)
-                else:
-                    await status_message.edit_text("❌ File not found after download. Please try again.")
+            else:
+                await status_message.edit_text("❌ File not found after download. Please try again.")
             context.user_data.clear()
         
         else:
@@ -229,6 +296,8 @@ def main():
     application = Application.builder().token(API_TOKEN).build()
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("stats", stats))
+    application.add_handler(CommandHandler("myid", myid))
+    application.add_handler(CommandHandler("users", users_list))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     
     print("Bot started!")
