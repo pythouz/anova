@@ -1,6 +1,8 @@
 import os
 import time
 import json
+import threading
+import subprocess
 import yt_dlp
 from telegram import Update, ReplyKeyboardMarkup, ReplyKeyboardRemove
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
@@ -20,9 +22,9 @@ MAX_FILE_SIZE_MB = 50
 # ابعت /myid للبوت عشان تعرف الآي دي بتاعك
 ADMIN_ID = os.getenv('ADMIN_ID')
 
-# مسار ملف الكوكيز (بيتكتب من الـ secret وقت التشغيل على GitHub Actions)
-# لو الملف مش موجود، البوت هيشتغل عادي من غيره (بس ممكن يوتيوب يرفض بعض الطلبات)
-COOKIES_FILE = 'cookies.txt'
+# إعدادات تتجاوز فحص "Sign in to confirm you're not a bot" بتاع يوتيوب
+# من غير احتياج لأي كوكيز أو تدخل يدوي (بيتنكر إنه طلب من تطبيق أندرويد)
+YOUTUBE_EXTRACTOR_ARGS = {'youtube': {'player_client': ['android', 'web']}}
 
 def load_users():
     """Load users from the JSON file"""
@@ -62,6 +64,34 @@ def get_user_count():
     users_data = load_users()
     return users_data['total_count']
 
+def _run_git(*args):
+    """يشغّل أمر git ويرجع True لو نجح، بيبلع أي خطأ من غير ما يوقف البوت"""
+    try:
+        subprocess.run(['git', *args], check=True, capture_output=True, text=True)
+        return True
+    except Exception as exc:
+        print(f"⚠️ git {' '.join(args)} فشل: {exc}")
+        return False
+
+def sync_users_file_loop():
+    """
+    كل بضع دقايق، يحفظ (commit + push) ملف بيانات المستخدمين على الريبو،
+    عشان البيانات متضيعش لما GitHub Actions يعيد تشغيل الـ workflow.
+    """
+    while True:
+        time.sleep(300)  # كل 5 دقايق
+        if not os.path.exists(USERS_FILE):
+            continue
+        _run_git('add', USERS_FILE)
+        # لو مفيش تغيير، commit هيفشل بهدوء وده متوقع وطبيعي
+        committed = _run_git('commit', '-m', 'Auto-update users data [skip ci]')
+        if committed:
+            _run_git('push')
+
+def start_users_sync():
+    thread = threading.Thread(target=sync_users_file_loop, daemon=True)
+    thread.start()
+
 def get_users_list():
     """Get a formatted list of all users with their info"""
     users_data = load_users()
@@ -80,9 +110,7 @@ def download_media(url, media_type='video', video_quality=None):
     timestamp = time.strftime("%Y%m%d-%H%M%S")
     try:
         # Extract available formats to determine the best match for the requested quality
-        probe_opts = {'quiet': True}
-        if os.path.exists(COOKIES_FILE):
-            probe_opts['cookiefile'] = COOKIES_FILE
+        probe_opts = {'quiet': True, 'extractor_args': YOUTUBE_EXTRACTOR_ARGS}
         with yt_dlp.YoutubeDL(probe_opts) as ydl:
             info = ydl.extract_info(url, download=False)
             formats = info.get('formats', [])
@@ -111,14 +139,11 @@ def download_media(url, media_type='video', video_quality=None):
             'outtmpl': os.path.join(DOWNLOAD_PATH, f'{media_type}_{timestamp}.%(ext)s'),
             'noplaylist': True,
             'quiet': True,
+            'extractor_args': YOUTUBE_EXTRACTOR_ARGS,
             'http_headers': {
                 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
             }
         }
-
-        # لو ملف الكوكيز موجود، استخدمه عشان يتجاوز فحص "Sign in to confirm you're not a bot"
-        if os.path.exists(COOKIES_FILE):
-            ydl_opts['cookiefile'] = COOKIES_FILE
 
         # Handle audio post-processing
         if media_type == 'audio':
@@ -311,6 +336,7 @@ def main():
     application.add_handler(CommandHandler("users", users_list))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     
+    start_users_sync()
     print("Bot started!")
     application.run_polling()
 
