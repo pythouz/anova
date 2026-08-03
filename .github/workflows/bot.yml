@@ -13,6 +13,10 @@ concurrency:
   group: telegram-bot
   cancel-in-progress: true
 
+# لازم عشان البوت يقدر يعمل push لبيانات المستخدمين على الريبو
+permissions:
+  contents: write
+
 jobs:
   run-bot:
     runs-on: ubuntu-latest
@@ -34,8 +38,11 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
 
-      - name: Write YouTube cookies
-        run: echo "${{ secrets.YT_COOKIES }}" > cookies.txt
+      - name: Configure git for auto-commit
+        run: |
+          git config user.name "telegram-bot"
+          git config user.email "actions@github.com"
+          git remote set-url origin https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git
 
       - name: Run the bot
         env:
