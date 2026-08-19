@@ -118,7 +118,6 @@ def boost_file_volume(file_path, factor=VOLUME_BOOST_FACTOR):
     ext = os.path.splitext(file_path)[1].lower()
     temp_output = f"{os.path.splitext(file_path)[0]}_boosted{ext}"
 
-    # إعداد أمر FFmpeg بحسب نوع الملف (صوت أم فيديو)
     if ext in ['.mp3', '.m4a', '.aac', '.wav']:
         cmd = [
             'ffmpeg', '-y', '-i', file_path,
@@ -148,7 +147,13 @@ def download_tiktok_fallback(url, media_type='video'):
     try:
         api_url = f"https://www.tikwm.com/api/?url={url}"
         headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
-        response = requests.get(api_url, headers=headers, timeout=15).json()
+        res = requests.get(api_url, headers=headers, timeout=15)
+        
+        if res.status_code != 200:
+            print(f"⚠️ TikWM API Status Code: {res.status_code}")
+            return None, None
+
+        response = res.json()
         
         if response.get('code') == 0:
             data = response['data']
@@ -172,9 +177,7 @@ def download_tiktok_fallback(url, media_type='video'):
                 for chunk in file_req.iter_content(chunk_size=8192):
                     f.write(chunk)
 
-            # رفع الصوت قبل إرجاع الملف
             file_path = boost_file_volume(file_path)
-
             return f"Successfully downloaded: {title}", file_path
     except Exception as e:
         print(f"⚠️ TikWM Fallback Error: {e}")
@@ -192,7 +195,6 @@ def download_media(url, media_type='video', video_quality=None):
     try:
         probe_opts = {
             'quiet': True, 
-            'impersonate': 'chrome',
             'extractor_args': YOUTUBE_EXTRACTOR_ARGS
         }
         if os.path.exists('cookies.txt'):
@@ -229,7 +231,6 @@ def download_media(url, media_type='video', video_quality=None):
         'outtmpl': os.path.join(DOWNLOAD_PATH, f'{media_type}_{timestamp}.%(ext)s'),
         'noplaylist': True,
         'quiet': False,
-        'impersonate': 'chrome',
         'extractor_args': YOUTUBE_EXTRACTOR_ARGS,
         'http_headers': {
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36'
