@@ -1,4 +1,5 @@
 python-telegram-bot==21.6
 yt-dlp[curl-cffi]
 curl-cffi
+requests
 flask
