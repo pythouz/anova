@@ -4,16 +4,17 @@ import json
 import asyncio
 import threading
 import subprocess
+import requests
 import yt_dlp
 from telegram import Update, ReplyKeyboardMarkup, ReplyKeyboardRemove
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 
-# Set up download directory
+# مسار مجلد التنزيلات
 DOWNLOAD_PATH = os.path.join(os.getcwd(), 'downloads')
 if not os.path.exists(DOWNLOAD_PATH):
     os.makedirs(DOWNLOAD_PATH)
 
-# User data storage
+# ملف تخزين المستخدمين
 USERS_FILE = 'bot_users.json'
 
 # حد تليجرام الأقصى لإرسال الملفات عن طريق البوت (بالميجابايت)
@@ -26,7 +27,7 @@ ADMIN_ID = os.getenv('ADMIN_ID')
 YOUTUBE_EXTRACTOR_ARGS = {'youtube': {'player_client': ['android', 'web']}}
 
 def load_users():
-    """Load users from the JSON file"""
+    """تحميل بيانات المستخدمين من JSON"""
     if os.path.exists(USERS_FILE):
         try:
             with open(USERS_FILE, 'r') as f:
@@ -36,12 +37,12 @@ def load_users():
     return {'users': [], 'total_count': 0}
 
 def save_users(users_data):
-    """Save users to the JSON file"""
+    """حفظ بيانات المستخدمين"""
     with open(USERS_FILE, 'w') as f:
         json.dump(users_data, f)
 
 def track_user(user_id, username, first_name):
-    """Track a user who interacted with the bot"""
+    """تتبع المستخدم وتسجيل نشاطه"""
     users_data = load_users()
     
     if str(user_id) not in users_data['users']:
@@ -59,12 +60,12 @@ def track_user(user_id, username, first_name):
     return users_data['total_count']
 
 def get_user_count():
-    """Get the total number of unique users"""
+    """إرجاع عدد المستخدمين"""
     users_data = load_users()
     return users_data['total_count']
 
 def _run_git(*args):
-    """يشغّل أمر git ويرجع True لو نجح"""
+    """تنفيذ أومر git للـ Auto-commit"""
     try:
         subprocess.run(['git', *args], check=True, capture_output=True, text=True)
         return True
@@ -73,7 +74,7 @@ def _run_git(*args):
         return False
 
 def sync_users_file_loop():
-    """حفظ وتزامن بيانات المستخدمين كل 5 دقائق"""
+    """تزامن تلقائي لملف المستخدمين مع GitHub كل 5 دقائق"""
     while True:
         time.sleep(300)
         if not os.path.exists(USERS_FILE):
@@ -88,7 +89,7 @@ def start_users_sync():
     thread.start()
 
 def get_users_list():
-    """Get a formatted list of all users"""
+    """قائمة المستخدمين للأدمن"""
     users_data = load_users()
     lines = []
     for uid in users_data['users']:
@@ -100,9 +101,45 @@ def get_users_list():
         lines.append(f"• {first_name} ({tag}) — آخر نشاط: {last_activity}")
     return lines
 
+def download_tiktok_fallback(url, media_type='video'):
+    """سيرفر احتياطي عبر TikWM للتحميل من تيك توك لتجاوز حظر سيرفرات GitHub"""
+    try:
+        api_url = f"https://www.tikwm.com/api/?url={url}"
+        headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
+        response = requests.get(api_url, headers=headers, timeout=15).json()
+        
+        if response.get('code') == 0:
+            data = response['data']
+            title = data.get('title', 'TikTok_Media')
+            
+            if media_type == 'audio':
+                dl_link = data.get('music')
+                ext = 'mp3'
+            else:
+                dl_link = data.get('play')
+                ext = 'mp4'
+
+            if not dl_link:
+                return None, None
+
+            timestamp = time.strftime("%Y%m%d-%H%M%S")
+            file_path = os.path.join(DOWNLOAD_PATH, f"tiktok_{timestamp}.{ext}")
+
+            file_req = requests.get(dl_link, headers=headers, stream=True)
+            with open(file_path, 'wb') as f:
+                for chunk in file_req.iter_content(chunk_size=8192):
+                    f.write(chunk)
+
+            return f"Successfully downloaded: {title}", file_path
+    except Exception as e:
+        print(f"⚠️ TikWM Fallback Error: {e}")
+    return None, None
+
 def download_media(url, media_type='video', video_quality=None):
-    """Download media from URL with specified quality options"""
+    """تحميل الوسائط مع معالجة الجودة والسيرفر الاحتياطي"""
     timestamp = time.strftime("%Y%m%d-%H%M%S")
+    is_tiktok = 'tiktok.com' in url.lower() or 'douyin' in url.lower()
+    
     try:
         probe_opts = {
             'quiet': True, 
@@ -137,7 +174,7 @@ def download_media(url, media_type='video', video_quality=None):
             'outtmpl': os.path.join(DOWNLOAD_PATH, f'{media_type}_{timestamp}.%(ext)s'),
             'noplaylist': True,
             'quiet': True,
-            'impersonate': 'chrome',  # حاسم لتجاوز حظر تيك توك وبصمة البراوزر
+            'impersonate': 'chrome',
             'extractor_args': YOUTUBE_EXTRACTOR_ARGS,
             'http_headers': {
                 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
@@ -165,6 +202,12 @@ def download_media(url, media_type='video', video_quality=None):
             return f"Successfully downloaded: {info_dict.get('title', 'Unknown')}", file_name
 
     except Exception as e:
+        if is_tiktok:
+            print("⚠️ yt-dlp failed on TikTok, switching to TikWM fallback...")
+            msg, path = download_tiktok_fallback(url, media_type)
+            if path:
+                return msg, path
+
         error_message = str(e)
         if "is not a valid URL" in error_message or "Unsupported URL" in error_message:
             return "❌ تحقق من الرابط. يبدو أن الرابط الذي أدخلته غير صالح.", None
@@ -238,7 +281,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             user_data['media_type'] = 'audio'
             status_message = await update.message.reply_text("⏳ Downloading audio... Please wait.")
             
-            # تشغيل التحميل في Thread خلفي لمنع تجميد البوت
             message, file_path = await asyncio.to_thread(
                 download_media, user_data['url'], media_type='audio'
             )
@@ -288,7 +330,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             
             status_message = await update.message.reply_text("⏳ Downloading video... Please wait.")
             
-            # تشغيل التحميل في Thread خلفي لمنع تجميد البوت
             message, file_path = await asyncio.to_thread(
                 download_media,
                 user_data['url'], 
