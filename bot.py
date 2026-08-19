@@ -145,11 +145,9 @@ def download_media(url, media_type='video', video_quality=None):
     timestamp = time.strftime("%Y%m%d-%H%M%S")
     is_tiktok = 'tiktok.com' in url.lower() or 'douyin' in url.lower()
     
-    # تحويل الجودة المطلوبة لعدد صحيح
     requested_height = int(video_quality.replace('p', '')) if video_quality else 720
     target_height = requested_height
 
-    # محاولة فحص الجودات المتوفرة آمنة (دون إيقاف الكود عند الفشل)
     try:
         probe_opts = {
             'quiet': True, 
@@ -173,7 +171,6 @@ def download_media(url, media_type='video', video_quality=None):
     except Exception as probe_err:
         print(f"⚠️ Probe failed, proceeding with fallback format selection: {probe_err}")
 
-    # ضبط صيغة التحميل لدعم يوتيوب (منفصل) وفيسبوك (مدموج)
     if media_type == 'video':
         format_str = (
             f'best[height<={target_height}]/'
@@ -217,7 +214,6 @@ def download_media(url, media_type='video', video_quality=None):
             return f"Successfully downloaded: {info_dict.get('title', 'Unknown')}", file_name
 
     except Exception as e:
-        # إذا كان الرابط تيك توك وفشل yt-dlp استخدم TikWM
         if is_tiktok:
             print("⚠️ yt-dlp failed on TikTok, switching to TikWM fallback...")
             msg, path = download_tiktok_fallback(url, media_type)
@@ -346,7 +342,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             
             status_message = await update.message.reply_text("⏳ Downloading video... Please wait.")
             
-            message, file_path = await asyncio-to_thread(
+            message, file_path = await asyncio.to_thread(
                 download_media,
                 user_data['url'], 
                 media_type='video', 
