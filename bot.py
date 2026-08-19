@@ -104,7 +104,13 @@ def download_media(url, media_type='video', video_quality=None):
     """Download media from URL with specified quality options"""
     timestamp = time.strftime("%Y%m%d-%H%M%S")
     try:
-        probe_opts = {'quiet': True, 'extractor_args': YOUTUBE_EXTRACTOR_ARGS}
+        probe_opts = {
+            'quiet': True, 
+            'impersonate': 'chrome',
+            'extractor_args': YOUTUBE_EXTRACTOR_ARGS
+        }
+        
+        target_height = 1080
         with yt_dlp.YoutubeDL(probe_opts) as ydl:
             info = ydl.extract_info(url, download=False)
             formats = info.get('formats', [])
@@ -112,27 +118,29 @@ def download_media(url, media_type='video', video_quality=None):
             
             requested_height = int(video_quality.replace('p', '')) if video_quality else None
             
-            if requested_height:
-                higher_qualities = [h for h in available_heights if h >= requested_height]
-                lower_qualities = [h for h in available_heights if h <= requested_height]
-                
-                if higher_qualities:
-                    target_height = min(higher_qualities)
-                elif lower_qualities:
-                    target_height = max(lower_qualities)
+            if available_heights:
+                if requested_height:
+                    higher_qualities = [h for h in available_heights if h >= requested_height]
+                    lower_qualities = [h for h in available_heights if h <= requested_height]
+                    
+                    if higher_qualities:
+                        target_height = min(higher_qualities)
+                    elif lower_qualities:
+                        target_height = max(lower_qualities)
+                    else:
+                        target_height = available_heights[0]
                 else:
-                    target_height = available_heights[0]
-            else:
-                target_height = max(available_heights) if available_heights else 720
+                    target_height = max(available_heights)
 
         ydl_opts = {
-            'format': f'bestvideo[height<={target_height}]+bestaudio/best[height<={target_height}]',
+            'format': f'bestvideo[height<={target_height}]+bestaudio/best[height<={target_height}]' if media_type == 'video' else 'bestaudio/best',
             'outtmpl': os.path.join(DOWNLOAD_PATH, f'{media_type}_{timestamp}.%(ext)s'),
             'noplaylist': True,
             'quiet': True,
+            'impersonate': 'chrome',  # حاسم لتجاوز حظر تيك توك وبصمة البراوزر
             'extractor_args': YOUTUBE_EXTRACTOR_ARGS,
             'http_headers': {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
             }
         }
 
@@ -230,7 +238,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             user_data['media_type'] = 'audio'
             status_message = await update.message.reply_text("⏳ Downloading audio... Please wait.")
             
-            # تشغيل التحميل في Thread منفصل لمنع تجميد البوت
+            # تشغيل التحميل في Thread خلفي لمنع تجميد البوت
             message, file_path = await asyncio.to_thread(
                 download_media, user_data['url'], media_type='audio'
             )
@@ -280,7 +288,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             
             status_message = await update.message.reply_text("⏳ Downloading video... Please wait.")
             
-            # تشغيل التحميل في Thread منفصل لمنع تجميد البوت
+            # تشغيل التحميل في Thread خلفي لمنع تجميد البوت
             message, file_path = await asyncio.to_thread(
                 download_media,
                 user_data['url'], 
