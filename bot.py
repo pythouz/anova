@@ -23,8 +23,13 @@ MAX_FILE_SIZE_MB = 50
 # آي دي الأدمن
 ADMIN_ID = os.getenv('ADMIN_ID')
 
-# إعدادات تجاوز فحص يوتيوب
-YOUTUBE_EXTRACTOR_ARGS = {'youtube': {'player_client': ['android', 'web']}}
+# إعدادات كسر حظر يوتيوب على سيرفرات الداتا سنتر
+YOUTUBE_EXTRACTOR_ARGS = {
+    'youtube': {
+        'player_client': ['mweb', 'ios', 'android'],
+        'player_skip': ['webpage', 'configs']
+    }
+}
 
 def load_users():
     """تحميل بيانات المستخدمين من JSON"""
@@ -140,55 +145,65 @@ def download_media(url, media_type='video', video_quality=None):
     timestamp = time.strftime("%Y%m%d-%H%M%S")
     is_tiktok = 'tiktok.com' in url.lower() or 'douyin' in url.lower()
     
+    # تحويل الجودة المطلوبة لعدد صحيح
+    requested_height = int(video_quality.replace('p', '')) if video_quality else 720
+    target_height = requested_height
+
+    # محاولة فحص الجودات المتوفرة آمنة (دون إيقاف الكود عند الفشل)
     try:
         probe_opts = {
             'quiet': True, 
             'impersonate': 'chrome',
             'extractor_args': YOUTUBE_EXTRACTOR_ARGS
         }
-        
-        target_height = 1080
         with yt_dlp.YoutubeDL(probe_opts) as ydl:
             info = ydl.extract_info(url, download=False)
             formats = info.get('formats', [])
             available_heights = sorted(set(f.get('height', 0) for f in formats if f.get('height')))
             
-            requested_height = int(video_quality.replace('p', '')) if video_quality else None
-            
             if available_heights:
-                if requested_height:
-                    higher_qualities = [h for h in available_heights if h >= requested_height]
-                    lower_qualities = [h for h in available_heights if h <= requested_height]
-                    
-                    if higher_qualities:
-                        target_height = min(higher_qualities)
-                    elif lower_qualities:
-                        target_height = max(lower_qualities)
-                    else:
-                        target_height = available_heights[0]
+                higher_qualities = [h for h in available_heights if h >= requested_height]
+                lower_qualities = [h for h in available_heights if h <= requested_height]
+                if higher_qualities:
+                    target_height = min(higher_qualities)
+                elif lower_qualities:
+                    target_height = max(lower_qualities)
                 else:
-                    target_height = max(available_heights)
+                    target_height = available_heights[0]
+    except Exception as probe_err:
+        print(f"⚠️ Probe failed, proceeding with fallback format selection: {probe_err}")
 
-        ydl_opts = {
-            'format': f'bestvideo[height<={target_height}]+bestaudio/best[height<={target_height}]' if media_type == 'video' else 'bestaudio/best',
-            'outtmpl': os.path.join(DOWNLOAD_PATH, f'{media_type}_{timestamp}.%(ext)s'),
-            'noplaylist': True,
-            'quiet': True,
-            'impersonate': 'chrome',
-            'extractor_args': YOUTUBE_EXTRACTOR_ARGS,
-            'http_headers': {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
-            }
+    # ضبط صيغة التحميل لدعم يوتيوب (منفصل) وفيسبوك (مدموج)
+    if media_type == 'video':
+        format_str = (
+            f'best[height<={target_height}]/'
+            f'bestvideo[height<={target_height}]+bestaudio/'
+            f'best[height<={target_height}]/best'
+        )
+    else:
+        format_str = 'bestaudio/best'
+
+    ydl_opts = {
+        'format': format_str,
+        'outtmpl': os.path.join(DOWNLOAD_PATH, f'{media_type}_{timestamp}.%(ext)s'),
+        'noplaylist': True,
+        'quiet': True,
+        'impersonate': 'chrome',
+        'extractor_args': YOUTUBE_EXTRACTOR_ARGS,
+        'http_headers': {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36'
         }
+    }
 
-        if media_type == 'audio':
-            ydl_opts.update({
-                'postprocessors': [{
-                    'key': 'FFmpegExtractAudio',
-                    'preferredcodec': 'mp3',
-                }]
-            })
+    if media_type == 'audio':
+        ydl_opts.update({
+            'postprocessors': [{
+                'key': 'FFmpegExtractAudio',
+                'preferredcodec': 'mp3',
+            }]
+        })
 
+    try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info_dict = ydl.extract_info(url, download=True)
             file_name = ydl.prepare_filename(info_dict)
@@ -202,6 +217,7 @@ def download_media(url, media_type='video', video_quality=None):
             return f"Successfully downloaded: {info_dict.get('title', 'Unknown')}", file_name
 
     except Exception as e:
+        # إذا كان الرابط تيك توك وفشل yt-dlp استخدم TikWM
         if is_tiktok:
             print("⚠️ yt-dlp failed on TikTok, switching to TikWM fallback...")
             msg, path = download_tiktok_fallback(url, media_type)
@@ -330,7 +346,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             
             status_message = await update.message.reply_text("⏳ Downloading video... Please wait.")
             
-            message, file_path = await asyncio.to_thread(
+            message, file_path = await asyncio-to_thread(
                 download_media,
                 user_data['url'], 
                 media_type='video', 
