@@ -380,8 +380,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True, one_time_keyboard=True)
             await update.message.reply_text(
                 "Select video quality:\n"
-                "⚠️ ملحوظة: الفيديوهات الطويلة أو بجودة عالية ممكن يتعدى حجمها 50MB "
-                "(حد تليجرام)، فينصح تختار جودة أقل للفيديوهات الطويلة.",
+                " ينصح تختار جودة أقل للفيديوهات الطويلة.",
                 reply_markup=reply_markup
             )
         else:
