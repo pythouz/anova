@@ -1,26 +1,23 @@
 name: Telegram Bot Runner
 
 on:
-  # يشتغل تلقائيًا كل 5 ساعات (قبل ما الجوب القديم يوصل لحد الـ 6 ساعات)
+  # يشتغل تلقائيًا كل 5 ساعات
   schedule:
     - cron: "0 */5 * * *"
-  # يسمحلك تشغّله يدوي من تبويب Actions لو عايز تبدأه فورًا
+  # تشغيل يدوي عند الحاجة
   workflow_dispatch:
 
-# ده أهم جزء: لو جوب جديد بدأ، يقفل القديم فورًا
-# عشان يفضل نسخة واحدة بس شغالة (تجنبًا لتعارض الـ polling)
+# منع تعارض الـ polling بقفل الجوب القديم فورًا عند بدء جديد
 concurrency:
   group: telegram-bot
   cancel-in-progress: true
 
-# لازم عشان البوت يقدر يعمل push لبيانات المستخدمين على الريبو
 permissions:
   contents: write
 
 jobs:
   run-bot:
     runs-on: ubuntu-latest
-    # أقل من حد الـ 6 ساعات (360 دقيقة) عشان يدّي وقت كافي قبل التبديل
     timeout-minutes: 350
 
     steps:
@@ -32,8 +29,9 @@ jobs:
         with:
           python-version: "3.11"
 
+      # بديل سريع جدًا لـ apt-get ينزل النسخة الخفيفة المباشرة خلال ثوانٍ
       - name: Install ffmpeg
-        run: sudo apt-get update && sudo apt-get install -y ffmpeg
+        uses: FedericoTerzi/setup-ffmpeg-action@v1
 
       - name: Install dependencies
         run: pip install -r requirements.txt
