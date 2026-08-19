@@ -7,7 +7,7 @@ on:
   # تشغيل يدوي عند الحاجة
   workflow_dispatch:
 
-# منع تعارض الـ polling بقفل الجوب القديم فورًا عند بدء جديد
+# قفل الجوب القديم فورًا عند بدء جديد لمنع تعارض الـ polling
 concurrency:
   group: telegram-bot
   cancel-in-progress: true
@@ -29,9 +29,9 @@ jobs:
         with:
           python-version: "3.11"
 
-      # بديل سريع جدًا لـ apt-get ينزل النسخة الخفيفة المباشرة خلال ثوانٍ
+      # تثبيت سرييع ومضمون لـ FFmpeg بدون الاعتماد على مستودعات خارجية غير مستقرة
       - name: Install ffmpeg
-        uses: FedericoTerzi/setup-ffmpeg-action@v1
+        uses: yt-dlp/setup-ffmpeg@v1
 
       - name: Install dependencies
         run: pip install -r requirements.txt
