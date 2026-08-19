@@ -5,6 +5,7 @@ import asyncio
 import threading
 import subprocess
 import requests
+import traceback
 import yt_dlp
 from telegram import Update, ReplyKeyboardMarkup, ReplyKeyboardRemove
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
@@ -70,7 +71,7 @@ def get_user_count():
     return users_data['total_count']
 
 def _run_git(*args):
-    """تنفيذ أومر git للـ Auto-commit"""
+    """تنفيذ أوامر git للـ Auto-commit"""
     try:
         subprocess.run(['git', *args], check=True, capture_output=True, text=True)
         return True
@@ -138,10 +139,11 @@ def download_tiktok_fallback(url, media_type='video'):
             return f"Successfully downloaded: {title}", file_path
     except Exception as e:
         print(f"⚠️ TikWM Fallback Error: {e}")
+        traceback.print_exc()
     return None, None
 
 def download_media(url, media_type='video', video_quality=None):
-    """تحميل الوسائط مع معالجة الجودة والسيرفر الاحتياطي"""
+    """تحميل الوسائط مع معالجة الجودة وإظهار اللوجز للتصحيح"""
     timestamp = time.strftime("%Y%m%d-%H%M%S")
     is_tiktok = 'tiktok.com' in url.lower() or 'douyin' in url.lower()
     
@@ -154,6 +156,9 @@ def download_media(url, media_type='video', video_quality=None):
             'impersonate': 'chrome',
             'extractor_args': YOUTUBE_EXTRACTOR_ARGS
         }
+        if os.path.exists('cookies.txt'):
+            probe_opts['cookiefile'] = 'cookies.txt'
+
         with yt_dlp.YoutubeDL(probe_opts) as ydl:
             info = ydl.extract_info(url, download=False)
             formats = info.get('formats', [])
@@ -169,7 +174,7 @@ def download_media(url, media_type='video', video_quality=None):
                 else:
                     target_height = available_heights[0]
     except Exception as probe_err:
-        print(f"⚠️ Probe failed, proceeding with fallback format selection: {probe_err}")
+        print(f"⚠️ Probe failed for URL [{url}]: {probe_err}")
 
     if media_type == 'video':
         format_str = (
@@ -184,13 +189,17 @@ def download_media(url, media_type='video', video_quality=None):
         'format': format_str,
         'outtmpl': os.path.join(DOWNLOAD_PATH, f'{media_type}_{timestamp}.%(ext)s'),
         'noplaylist': True,
-        'quiet': True,
+        'quiet': False,  # تم إيقاف المود الخفي لطباعة الأخطاء في اللوجز
         'impersonate': 'chrome',
         'extractor_args': YOUTUBE_EXTRACTOR_ARGS,
         'http_headers': {
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36'
         }
     }
+
+    # استخدام ملف الـ Cookies تلقائيًا لو كان موجود في الجذر
+    if os.path.exists('cookies.txt'):
+        ydl_opts['cookiefile'] = 'cookies.txt'
 
     if media_type == 'audio':
         ydl_opts.update({
@@ -214,6 +223,9 @@ def download_media(url, media_type='video', video_quality=None):
             return f"Successfully downloaded: {info_dict.get('title', 'Unknown')}", file_name
 
     except Exception as e:
+        print(f"❌ [Download Error] Failed to process URL: {url}")
+        traceback.print_exc()
+
         if is_tiktok:
             print("⚠️ yt-dlp failed on TikTok, switching to TikWM fallback...")
             msg, path = download_tiktok_fallback(url, media_type)
