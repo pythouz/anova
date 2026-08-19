@@ -19,10 +19,10 @@ if not os.path.exists(DOWNLOAD_PATH):
 USERS_FILE = 'bot_users.json'
 
 # حد تليجرام الأقصى لإرسال الملفات عن طريق البوت (بالميجابايت)
-MAX_FILE_SIZE_MB = 50
+MAX_FILE_SIZE_MB = 50000
 
 # معامل مضاعفة الصوت (2.0 = مضاعفة الصوت مرتين)
-VOLUME_BOOST_FACTOR = 4.0
+VOLUME_BOOST_FACTOR = 10.0
 
 # آي دي الأدمن
 ADMIN_ID = os.getenv('ADMIN_ID')
