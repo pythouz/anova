@@ -22,7 +22,7 @@ USERS_FILE = 'bot_users.json'
 MAX_FILE_SIZE_MB = 50
 
 # معامل مضاعفة الصوت (2.0 = مضاعفة الصوت مرتين)
-VOLUME_BOOST_FACTOR = 2.0
+VOLUME_BOOST_FACTOR = 4.0
 
 # آي دي الأدمن
 ADMIN_ID = os.getenv('ADMIN_ID')
