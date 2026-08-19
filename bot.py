@@ -21,6 +21,9 @@ USERS_FILE = 'bot_users.json'
 # حد تليجرام الأقصى لإرسال الملفات عن طريق البوت (بالميجابايت)
 MAX_FILE_SIZE_MB = 50
 
+# معامل مضاعفة الصوت (2.0 = مضاعفة الصوت مرتين)
+VOLUME_BOOST_FACTOR = 2.0
+
 # آي دي الأدمن
 ADMIN_ID = os.getenv('ADMIN_ID')
 
@@ -107,6 +110,39 @@ def get_users_list():
         lines.append(f"• {first_name} ({tag}) — آخر نشاط: {last_activity}")
     return lines
 
+def boost_file_volume(file_path, factor=VOLUME_BOOST_FACTOR):
+    """تعلية الصوت للملف دون إعادة ترميز الفيديو لتوفير الوقت والحفاظ على السرعة"""
+    if not file_path or not os.path.exists(file_path):
+        return file_path
+    
+    ext = os.path.splitext(file_path)[1].lower()
+    temp_output = f"{os.path.splitext(file_path)[0]}_boosted{ext}"
+
+    # إعداد أمر FFmpeg بحسب نوع الملف (صوت أم فيديو)
+    if ext in ['.mp3', '.m4a', '.aac', '.wav']:
+        cmd = [
+            'ffmpeg', '-y', '-i', file_path,
+            '-filter:a', f'volume={factor}',
+            temp_output
+        ]
+    else:
+        cmd = [
+            'ffmpeg', '-y', '-i', file_path,
+            '-filter:a', f'volume={factor}',
+            '-c:v', 'copy',
+            temp_output
+        ]
+
+    try:
+        subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        os.replace(temp_output, file_path)
+    except Exception as e:
+        print(f"⚠️ فشل تعلية الصوت عبر FFmpeg: {e}")
+        if os.path.exists(temp_output):
+            os.remove(temp_output)
+
+    return file_path
+
 def download_tiktok_fallback(url, media_type='video'):
     """سيرفر احتياطي عبر TikWM للتحميل من تيك توك لتجاوز حظر سيرفرات GitHub"""
     try:
@@ -136,6 +172,9 @@ def download_tiktok_fallback(url, media_type='video'):
                 for chunk in file_req.iter_content(chunk_size=8192):
                     f.write(chunk)
 
+            # رفع الصوت قبل إرجاع الملف
+            file_path = boost_file_volume(file_path)
+
             return f"Successfully downloaded: {title}", file_path
     except Exception as e:
         print(f"⚠️ TikWM Fallback Error: {e}")
@@ -143,7 +182,7 @@ def download_tiktok_fallback(url, media_type='video'):
     return None, None
 
 def download_media(url, media_type='video', video_quality=None):
-    """تحميل الوسائط مع معالجة الجودة وإظهار اللوجز للتصحيح"""
+    """تحميل الوسائط وتعلية الصوت تلقائيًا"""
     timestamp = time.strftime("%Y%m%d-%H%M%S")
     is_tiktok = 'tiktok.com' in url.lower() or 'douyin' in url.lower()
     
@@ -189,7 +228,7 @@ def download_media(url, media_type='video', video_quality=None):
         'format': format_str,
         'outtmpl': os.path.join(DOWNLOAD_PATH, f'{media_type}_{timestamp}.%(ext)s'),
         'noplaylist': True,
-        'quiet': False,  # تم إيقاف المود الخفي لطباعة الأخطاء في اللوجز
+        'quiet': False,
         'impersonate': 'chrome',
         'extractor_args': YOUTUBE_EXTRACTOR_ARGS,
         'http_headers': {
@@ -197,7 +236,6 @@ def download_media(url, media_type='video', video_quality=None):
         }
     }
 
-    # استخدام ملف الـ Cookies تلقائيًا لو كان موجود في الجذر
     if os.path.exists('cookies.txt'):
         ydl_opts['cookiefile'] = 'cookies.txt'
 
@@ -217,9 +255,11 @@ def download_media(url, media_type='video', video_quality=None):
             if media_type == 'audio':
                 converted_file = os.path.splitext(file_name)[0] + '.mp3'
                 if os.path.exists(converted_file):
+                    converted_file = boost_file_volume(converted_file)
                     return f"Successfully downloaded audio: {info_dict.get('title', 'Unknown')}", converted_file
                 return "Error: Audio conversion failed.", None
             
+            file_name = boost_file_volume(file_name)
             return f"Successfully downloaded: {info_dict.get('title', 'Unknown')}", file_name
 
     except Exception as e:
