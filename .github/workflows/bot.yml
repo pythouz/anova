@@ -29,9 +29,14 @@ jobs:
         with:
           python-version: "3.11"
 
-      # تثبيت سرييع ومضمون لـ FFmpeg بدون الاعتماد على مستودعات خارجية غير مستقرة
+      # تحميل وتثبيت FFmpeg Static Binary مباشرة في ثوانٍ بدون الاعتماد على أي Action خارجي
       - name: Install ffmpeg
-        uses: yt-dlp/setup-ffmpeg@v1
+        run: |
+          mkdir -p ffmpeg_temp
+          curl -sL https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-amd64-static.tar.xz | tar -xJ -C ffmpeg_temp --strip-components=1
+          sudo mv ffmpeg_temp/ffmpeg ffmpeg_temp/ffprobe /usr/local/bin/
+          rm -rf ffmpeg_temp
+          ffmpeg -version
 
       - name: Install dependencies
         run: pip install -r requirements.txt
