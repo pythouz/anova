@@ -10,6 +10,9 @@ import yt_dlp
 from telegram import Update, ReplyKeyboardMarkup, ReplyKeyboardRemove
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 
+# ----- Import the API background starter -----
+from api import start_api_in_background
+
 # مسار مجلد التنزيلات
 DOWNLOAD_PATH = os.path.join(os.getcwd(), 'downloads')
 if not os.path.exists(DOWNLOAD_PATH):
@@ -435,6 +438,10 @@ def main():
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     
     start_users_sync()
+    
+    # ⭐ Start the API server in a background thread
+    start_api_in_background()
+    
     print("Bot started!")
     application.run_polling()
 
